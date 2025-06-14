@@ -1,13 +1,14 @@
 import React, { useState, useRef, useEffect } from 'react';
 import axios from 'axios';
 import ReactMarkdown from 'react-markdown';
-import { Send, Bot, User, Loader2 } from 'lucide-react';
+import { Send, Bot, User, Loader2, AlertCircle } from 'lucide-react';
 import './App.css';
 
 function App() {
   const [messages, setMessages] = useState([]);
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState(null);
   const messagesEndRef = useRef(null);
 
   const scrollToBottom = () => {
@@ -18,41 +19,65 @@ function App() {
     scrollToBottom();
   }, [messages]);
 
-  const sendMessage = async () => {
-    if (!inputValue.trim() || isLoading) return;
+  const validateInput = (input) => {
+    if (!input.trim()) {
+      throw new Error('メッセージを入力してください');
+    }
+    if (input.length > 4000) {
+      throw new Error('メッセージは4000文字以内で入力してください');
+    }
+  };
 
-    const userMessage = { role: 'user', content: inputValue };
-    const newMessages = [...messages, userMessage];
-    setMessages(newMessages);
-    setInputValue('');
-    setIsLoading(true);
+  const handleError = (error) => {
+    let errorMessage = 'エラーが発生しました。もう一度お試しください。';
+    
+    if (error.code === 'ECONNABORTED') {
+      errorMessage = 'リクエストがタイムアウトしました。もう一度お試しください。';
+    } else if (error.response?.status === 429) {
+      errorMessage = `レート制限に達しました。${error.response.data.retryAfter || 'しばらく'}お待ちください。`;
+    } else if (error.response?.data?.error) {
+      errorMessage = error.response.data.error;
+    } else if (error.message) {
+      errorMessage = error.message;
+    }
+
+    setError(errorMessage);
+    setTimeout(() => setError(null), 5000); // 5秒後にエラーメッセージを消す
+    return errorMessage;
+  };
+
+  const sendMessage = async () => {
+    if (isLoading) return;
 
     try {
+      validateInput(inputValue);
+      setError(null);
+
+      const userMessage = { role: 'user', content: inputValue };
+      const newMessages = [...messages, userMessage];
+      setMessages(newMessages);
+      setInputValue('');
+      setIsLoading(true);
+
       const response = await axios.post('/api/chat', {
         messages: newMessages
       }, {
-        timeout: 60000  // 60秒のタイムアウト
+        timeout: 60000,  // 60秒のタイムアウト
+        headers: {
+          'Content-Type': 'application/json'
+        }
       });
 
       const aiMessage = response.data.message;
       setMessages([...newMessages, aiMessage]);
       
-      // 使用量の表示（デバッグ用）
       if (response.data.usage) {
         console.log('Token usage:', response.data.usage);
       }
       
     } catch (error) {
-      console.error('Error sending message:', error);
-      let errorMessage = 'エラーが発生しました。もう一度お試しください。';
-      
-      if (error.code === 'ECONNABORTED') {
-        errorMessage = 'リクエストがタイムアウトしました。もう一度お試しください。';
-      } else if (error.response?.status === 429) {
-        errorMessage = 'リクエスト制限に達しました。しばらくお待ちください。';
-      }
-      
-      setMessages([...newMessages, {
+      const errorMessage = handleError(error);
+      setMessages([...messages, {
         role: 'assistant',
         content: errorMessage
       }]);
@@ -70,6 +95,7 @@ function App() {
 
   const clearChat = () => {
     setMessages([]);
+    setError(null);
   };
 
   return (
@@ -85,6 +111,13 @@ function App() {
           </button>
         </div>
       </header>
+
+      {error && (
+        <div className="error-banner">
+          <AlertCircle className="error-icon" />
+          <span>{error}</span>
+        </div>
+      )}
 
       <main className="chat-container">
         <div className="messages-container">
@@ -140,11 +173,13 @@ function App() {
               className="message-input"
               rows="1"
               disabled={isLoading}
+              maxLength={4000}
             />
             <button
               onClick={sendMessage}
               disabled={!inputValue.trim() || isLoading}
               className="send-button"
+              title={!inputValue.trim() ? "メッセージを入力してください" : "送信"}
             >
               <Send />
             </button>
